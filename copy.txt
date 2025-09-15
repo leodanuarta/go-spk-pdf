@@ -1,0 +1,235 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/jung-kurt/gofpdf"
+)
+
+func main() {
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.SetMargins(20, 20, 20)
+	pdf.AddPage()
+
+	// Page & column setup
+	pageW, pageH := pdf.GetPageSize()
+	leftM, topM, rightM, bottomM := pdf.GetMargins()
+	colGap := 8.0
+	colW := (pageW - leftM - rightM - colGap) / 2
+	colH := pageH - topM - bottomM
+
+	// Cursor start
+	curCol := 0
+	x := leftM
+	y := topM
+	pdf.SetXY(x, y)
+
+	// ==== TITLE (tetap full width) ====
+	pdf.SetFont("Times", "B", 14)
+	pdf.CellFormat(0, 8, "PERJANJIAN KERJASAMA", "", 1, "C", false, 0, "")
+	pdf.CellFormat(0, 8, "APOTEK DARING", "", 1, "C", false, 0, "")
+	pdf.CellFormat(0, 8, "No. SP/XXX/LGL-PPP/XXX/2025", "", 1, "C", false, 0, "")
+	pdf.Ln(6)
+	pdf.SetFont("Times", "", 12)
+
+	// ==== CONTENT ====
+	content := strings.Split(fullText, "\n")
+
+	lineH := 6.0
+	for _, para := range content {
+		para = strings.TrimSpace(para)
+		if para == "" {
+			continue
+		}
+
+		// Pasal heading → tetap dalam kolom, tapi bold
+		if strings.HasPrefix(para, "PASAL") ||
+			strings.ToUpper(para) == "PENDAHULUAN" ||
+			strings.ToUpper(para) == "JANGKA WAKTU" ||
+			strings.Contains(strings.ToUpper(para), "HAK DAN KEWAJIBAN") ||
+			strings.ToUpper(para) == "KERAHASIAAN" ||
+			strings.Contains(strings.ToUpper(para), "SANKSI") ||
+			strings.Contains(strings.ToUpper(para), "FORCE MAJEURE") ||
+			strings.Contains(strings.ToUpper(para), "PENYELESAIAN SENGKETA") ||
+			strings.ToUpper(para) == "PENUTUP" {
+
+			// cek muat atau tidak
+			lineCount := pdf.SplitLines([]byte(para), colW)
+			neededH := float64(len(lineCount)) * lineH
+			if y+neededH > topM+colH {
+				if curCol == 0 {
+					curCol = 1
+					x = leftM + colW + colGap
+					y = topM
+					pdf.SetXY(x, y)
+				} else {
+					pdf.AddPage()
+					curCol = 0
+					x = leftM
+					y = topM
+					pdf.SetXY(x, y)
+				}
+			}
+
+			// cetak heading bold di kolom
+			pdf.SetFont("Times", "B", 12)
+			pdf.MultiCell(colW, lineH, para, "", "L", false)
+			pdf.SetFont("Times", "", 12)
+			y = pdf.GetY()
+			continue
+		}
+
+		// Normal paragraph
+		lineCount := pdf.SplitLines([]byte(para), colW)
+		neededH := float64(len(lineCount)) * lineH
+		if y+neededH > topM+colH {
+			if curCol == 0 {
+				curCol = 1
+				x = leftM + colW + colGap
+				y = topM
+				pdf.SetXY(x, y)
+			} else {
+				pdf.AddPage()
+				curCol = 0
+				x = leftM
+				y = topM
+				pdf.SetXY(x, y)
+			}
+		}
+		pdf.MultiCell(colW, lineH, para, "", "J", false)
+		y = pdf.GetY()
+	}
+
+	// ==== SIGNATURE BLOCK (tetap full width) ====
+	if curCol == 1 {
+		pdf.AddPage()
+	}
+	pdf.Ln(10)
+	pdf.CellFormat(0, 6, "Jakarta, 01 Agustus 2025", "", 1, "R", false, 0, "")
+	pdf.Ln(15)
+
+	colWsig := (pageW - leftM - rightM) / 2
+	pdf.CellFormat(colWsig, 6, "PIHAK PERTAMA", "", 0, "C", false, 0, "")
+	pdf.CellFormat(colWsig, 6, "PIHAK KEDUA", "", 1, "C", false, 0, "")
+	pdf.Ln(25)
+	pdf.CellFormat(colWsig, 6, "( Yasinta Yulian Hendrata )", "", 0, "C", false, 0, "")
+	pdf.CellFormat(colWsig, 6, "( ______________________ )", "", 1, "C", false, 0, "")
+
+	// ==== SAVE ====
+	err := pdf.OutputFileAndClose("agreement_twocolumn_pasalincolumn.pdf")
+	if err != nil {
+		fmt.Println("Error:", err)
+	}
+}
+
+var fullText = `
+[Perjanjian Kerja Sama Apotek Daring ini (selanjutnya disebut sebagai “Perjanjian”) dibuat dan ditandatangani pada hari ini Jumat, tanggal satu bulan Agustus tahun dua ribu dua puluh lima (01-08-2025), oleh dan antara :
+1.	PT Perintis Pelayanan Paripurna, suatu perseroan terbatas yang didirikan berdasarkan dan tunduk pada hukum Negara Republik Indonesia, beralamat di Grand ITC Permata Hijau Kantor Emerald, Jl.Letjen Soepeno Arteri Permata Hijau E No.26, Grogol Utara, Kebayoran Lama, Kota Jakarta Selatan, Provinsi DKI Jakarta. Dalam hal ini diwakili oleh Yasinta Yulian Hendrata selaku Presiden Direktur, oleh karenanya sah bertindak untuk dan atas nama PT Perintis Pelayanan Paripurna (selanjutnya disebut sebagai “PIHAK PERTAMA”).
+ Dan
+
+2.	_____________________, suatu [*] yang didirikan berdasarkan dan tunduk pada hukum Negara Republik Indonesia beralamat di _________________________.Dalam hal ini diwakili oleh _____________________selaku_____, oleh karenanya sah bertindak untuk dan atas nama _________ sebagai pengelola Apotek ______ dengan Nomor Surat Ijin Apotek (SIA) :______________ (selanjutnya disebut sebagai “PIHAK KEDUA”).
+
+PIHAK PERTAMA dan PIHAK KEDUA secara bersama-sama disebut sebagai “PARA PIHAK”dan secara masing-masing disebut sebagai “Pihak”. PARA PIHAK sepakat untuk menandatangani Perjanjian ini dengan ketentuan dan syarat-syarat sebagai berikut :
+PASAL 1
+PENDAHULUAN
+1.	PIHAK PERTAMA adalah agregator platform digital apotek yang bernama Apotek Daring dengan ini setuju untuk bekerjasama dengan PIHAK KEDUA. 
+2.	PIHAK KEDUA adalah apotek mitra yang bergabung dalam program kerja sama Apotek Daring.
+3.	PARA PIHAK sepakat untuk melakukan program kerja sama Apotek Daring dan pengelolaan produk secara digital yang berhubungan dengan distribusi farmasi.
+
+PASAL 2
+JANGKA WAKTU
+1.	Perjanjian ini berlaku selama ……….. tahun terhitung sejak tanggal ……. sampai dengan tanggal ……….
+2.	Jangka waktu dapat diperpanjang dengan salah satu Pihak mengajukan perpanjangan kepada Pihak lainnya paling lambat 1 (satu) bulan sebelum berakhirnya jangka waktu. Perjanjian ini efektif diperpanjang setelah ada kesepakatan secara tertulis dari PARA PIHAK.
+3.	Perjanjian ini akan tetap berlaku dan mengikat PARA PIHAK walaupun masing-masing Pihak mengalami perubahan anggaran dasar, perubahan susunan pemegang saham dan/atau Pihak pengendali, perubahan susunan pengurus, perubahan nama, perubahan status badan hukum dan/atau hadirnya ahli waris dari salah satu Pihak, termasuk apabila terjadinya penggabungan dan/atau peleburan.
+
+PASAL 3
+HAK DAN KEWAJIBAN PARA PIHAK
+1.	PIHAK PERTAMA berwenang memastikan bahwa PIHAK KEDUA memiliki lokasi usaha yang sah sesuai dengan ketentuan peraturan perundang-undangan yang berlaku.
+2.	PIHAK PERTAMA akan membantu PIHAK KEDUA dalam proses pendaftaran apotek mitra ke dalam platform e-commerce dan memberikan dukungan terhadap pelaksanaan digital marketing, meliputi pembuatan dan manajemen konten produk, strategi pemasaran produk, promosi, dan pemasangan iklan digital.
+3.	PIHAK PERTAMA akan menyediakan informasi yang meliputi usulan produk baru yang dapat diunggah kedalam platform e-commerce, analisis produk dengan penjualan tertinggi, program promosi, layanan integrasi dengan pihak ketiga yang ditunjuk, daftar produk yang dapat diperjualbelikan melalui platform e-commerce sesuai dengan kebijakan PIHAK PERTAMA, seluruh peraturan dan syarat dan ketentuan yang ditetapkan oleh platform e-commerce, dan tunduk pada seluruh ketentuan hukum dan peraturan perundang-undangan yang berlaku di Negara Republik Indonesia.
+4.	PIHAK KEDUA wajib menjamin akurasi, kelengkapan, dan keabsahan data yang dimasukkan ke dalam sistem yang digunakan dan PIHAK KEDUA wajib menjalankan seluruh kegiatan operasional apotek sesuai dengan ketentuan peraturan perundang-undangan dan kode etik kefarmasian yang berlaku.
+5.	PIHAK KEDUA wajib untuk menjaga integritas dalam penggunaan platform e-commerce melaporkan setiap kendala, gangguan, atau pelanggaran yang terjadi pada sistem kepada PIHAK PERTAMA secara tepat waktu sesuai dengan seluruh peraturan dan syarat dan ketentuan yang ditetapkan oleh platform e-commerce.
+6.	PIHAK KEDUA wajib untuk mengikuti program pelatihan dan evaluasi yang diselenggarakan secara berkala oleh PIHAK PERTAMA.
+7.	PIHAK KEDUA tidak diperbolehkan untuk melakukan manipulasi data transaksi yang timbul dalam pelaksanaan Perjanjian ini.
+8.	PIHAK KEDUA tidak diperbolehkan untuk mengalihkan akun atau akses platform e-commerce kepada Pihak lainnya tanpa persetujuan tertulis terlebih dahulu dari PIHAK PERTAMA.
+9.	PIHAK KEDUA wajib memproses pesanan berdasarkan stok yang tersedia pada apotek sesuai dengan resep resmi yang dikeluarkan oleh tenaga kesehatan yang berwenang.
+10.	PIHAK KEDUA wajib memberikan akses audit apabila akan dilaksanakan audit baik kepada PIHAK PERTAMA maupun lembaga resmi atau instasi terkait, termasuk namun tidak terbatas pada Badan Pengawas Obat dan Makanan (BPOM) dan Dinas Kesehatan.
+11.	PIHAK KEDUA wajib untuk menginformasikan secara langsung, jujur, terbuka, cepat dan tanpa penundaan kepada PIHAK PERTAMA apabila terdapat kunjungan audit, pemeriksaan, atau permintaan klarifikasi dari instansi pemerintah yang berwenang termasuk namun tidak terbatas pada Badan Pengawas Obat dan Makanan (BPOM), Dinas Kesehatan, atau lembaga pengawas lainnya yang berkaitan dengan operasional, perizinan dan/atau produk yang menjadi bagian dari pelaksanaan Perjanjian ini agar dapat berkoordinasi dan melakukan mitigasi resiko bersama.
+12.	PIHAK KEDUA wajib untuk memberikan Data Apotek serta dokumen penunjang lainnya serta menjamin keaslian dan keabsahannya jika di minta oleh PIHAK PERTAMA, platform e-commerce dan/atau instansi pemerintah yang berwenang untuk tujuan audit dan/atau tujuan Perjanjian ini.
+PASAL 4
+KERAHASIAAN
+1.	PARA PIHAK menjamin bahwa semua informasi rahasia terkait Perjanjian yang disampaikan kepada masing-masing Pihak baik secara lisan, tertulis, grafik, melalui media elektronik dan/atau informasi dalam bentuk lainnya selama berlangsungnya pembicaraan dan/atau selama pelaksanaan kerja sama akan dijaga kerahasiaannya oleh PARA PIHAK dari Pihak ketiga maupun Pihak terafiliasi dari PARA PIHAK dan akan dipergunakan hanya untuk kepentingan bersama PARA PIHAK berdasarkan dengan ketentuan yang diatur.
+2.	Masing-masing Pihak akan menggunakan Informasi Rahasia milik Pihak lainnya hanya untuk tujuan pelaksanaan Perjanjian ini dan atas sepengetahuan PARA PIHAK. PARA PIHAK bermaksud untuk saling berbagi informasi berupa ide, kepakaran, dan keahlian yang merupakan properti intelektual masing-masing Pihak dan karenanya bersifat rahasia.
+3.	Klausul kerahasiaan ini tidak berlaku bagi informasi yang setiap saat menjadi milik publik tanpa kesalahan dari Pihak manapun atau diminta untuk diberikan kepada kepada pemerintah atau penguasa umum sesuai dengan Undang-undang atau perintah/penetapan peradilan yang berlaku bagi setiap Pihak. Dalam hal demikian, masing-masing Pihak harus memberitahukan Pihak lainnya segera tentang kejadian tersebut.
+4.	Kewajiban untuk menjaga kerahasiaan Informasi Rahasia oleh PARA PIHAK ini akan terus berlaku, baik selama jangka waktu Perjanjian ini maupun dalam hal terjadi pengakhiran Perjanjian ini.
+5.	Segera setelah berakhirnya Perjanjian ini, PARA PIHAK wajib menghancurkan seluruh Informasi Rahasia serta dokumen atau media lain yang memuat Informasi Rahasia beserta semua salinannya. Namun, jika Informasi Rahasia tersebut dalam bentuk yang tidak dapat dikembalikan atau telah disalin atau dipindahkan ke dokumen lain, maka dokumen yang dimaksud tetap harus dimusnahkan atau dihapus dengan benar. 
+
+PASAL 5
+SANKSI DAN PENGAKHIRAN  
+1.	PARA PIHAK dapat mengakhiri perjanjian ini dengan memberikan pemberitahuan secara tertulis paling lambat 30 (tiga puluh) hari sebelum tanggal efektif Perjanjian diakhiri.
+2.	PARA PIHAK menyepakati bahwa Perjanjian ini dapat berakhir apabila:
+a.	Salah satu Pihak telah dinyatakan lalai dan wanprestasi terhadap sebagian maupun seluruh ketentuan yang diatur dalam Perjanjian ini. 
+b.	Atau terjadi Keadaan Kahar (Force Majeure) sebagaimana dimaksud pada Pasal 6 Perjanjian ini dengan salah satu Pihak melakukan pemberitahuan kepada Pihak lainnya saat Keadaan Kahar (Force Majeure) terjadi.
+3.	Dalam hal Perjanjian ini berakhir oleh suatu sebab apapun, maka PARA PIHAK sepakat untuk menyelesaikan kewajiban-kewajibannya yang dapat diselesaikan sebelum tanggal berakhirnya Perjanjian.
+4.	PARA PIHAK sepakat mengesampingkan ketentuan dari Pasal 1266 dan Pasal 1267 KUHPerdata, sepanjang ketentuan yang mewajibkan penetapan pengadilan diperlukan untuk pengakhiran suatu perjanjian.
+5.	Apabila PIHAK KEDUA terbukti melakukan penyalahgunaan sistem akan dikenakan sanksi berupa sanksi administratif, pemblokiran akses ke sistem dan/atau pemutusan kerja sama secara sepihak oleh PIHAK PERTAMA.
+6.	Audit yang dilaksanakan oleh PIHAK PERTAMA tidak merupakan satu kesatuan dengan audit dari instansi pemerintah yang berwenang.
+7.	PIHAK KEDUA dilarang memproses pemesanan obat yang termasuk dalam kategori obat resep tanpa adanya resep resmi yang sah dari tenaga kesehatan yang berwenang dan sesuai dengan ketentuan peraturan perundang-undangan yang berlaku.
+8.	PIHAK KEDUA dilarang memperjualbelikan obat yang tidak memiliki Nomor Izin Edar (NIE) yang dikeluarkan oleh Badan Pengawas Obat dan Makanan (BPOM).
+9.	Dalam hal dokumen legalitas milik PIHAK KEDUA termasuk namun tidak terbatas pada Data Apotek dan/atau izin operasional apotek lainnya telah habis masa berlakunya, tidak diperpanjang, atau tidak diinformasikan kepada PIHAK PERTAMA secara tepat waktu dan/atau apabila terdapat temuan pelanggaran serius dari hasil audit oleh instansi pemerintah yang berwenang termasuk namun tidak terbatas oleh Badan Pengawas Obat dan Makanan (BPOM), Dinas Kesehatan dan/atau instansi pemerintah yang berwenang lainnya, maka akan berlaku ketentuan sebagai berikut:
+a.	PIHAK PERTAMA berhak untuk menghentikan sementara atau permanen seluruh bentuk layanan, akses sistem, distribusi, atau kerja sama apapun yang sedang berjalan tanpa persetujuan atau pemberitahuan terlebih dahulu kepada PIHAK KEDUA.
+b.	Penghentian layanan dan pemberlakuan penalti tidak dapat dianggap sebagai wanprestasi atau pelanggaran kontrak oleh PIHAK PERTAMA, melainkan sebagai tindakan korektif dan perlindungan hukum untuk memastikan kepatuhan kerja sama terhadap peraturan perundang-undangan yang berlaku.
+c.	Kerja sama dapat dilanjutkan kembali setelah PIHAK KEDUA menyampaikan bukti pemenuhan dokumen legalitas yang sah dan berlaku serta mendapat persetujuan tertulis dari PIHAK PERTAMA.
+10.	Dalam hal PIHAK KEDUA terbukti melakukan pelanggaran terhadap Perjanjian ini, maka PIHAK KEDUA akan di kenakan sanksi dengan ketentuan sebagai berikut:
+a.	Pemberian Surat Peringatan maksimal sebanyak 3 (tiga) kali yang akan disesuaikan dengan jenis dan tingkat pelanggaran yang dilakukan oleh PIHAK KEDUA.
+b.	Pemutusan kerja sama secara sepihak oleh PIHAK PERTAMA tanpa adanya kewajiban untuk memberikan kompensasi atau ganti rugi dalam bentuk apapun kepada PIHAK KEDUA.
+11.	Apabila Pihak yang berbuat lalai tidak memenuhi kewajibannya dalam waktu paling lambat 7 (tujuh) hari kerja, maka Pihak yang dirugikan dapat mengirimkan surat pemberitahuan tertulis kepada Pihak yang berbuat kelalaian untuk melaksanakan kembali kewajiban-kewajibannya sejak tanggal pemberitahuan tertulis dari Pihak lainnya.  Pihak yang dirugikan dapat mengajukan penyelesaian sesuai dengan ketentuan hukum dan peraturan Perundang-undangan yang berlaku di Republik Indonesia. Kejadian Lalai tersebut adalah keadaan dimana salah satu Pihak tidak melaksanakan kewajiban dari Perjanjian ini melebihi batas waktu yang ditetapkan pada Perjanjian ini yang mengakibatkan terhambat dan/atau diundurnya pelaksanaan Perjanjian ini.
+
+
+PASAL 6
+KEADAAN KAHAR (FORCE MAJEURE)
+1.	Keadaan Kahar (Force Majeure) adalah suatu keadaan atau peristiwa yang terjadi karena kehendak Tuhan atau kejadian di luar kekuasaan atau kehendak manusia yang tidak dapat dihindari dengan upaya sungguh-sungguh yang lazim sehingga menyebabkan terhentinya pelaksanaan Perjanjian ini dan/atau mundurnya pelaksanaan Perjanjian ini. Adapun Keadaan Kahar (Force Majeure) termasuk namun tidak terbatas pada:
+a.	Perang, pemberontakan, huru hara, epidemi/pandemi, tindakan-tindakan pemerintah dalam rangka perubahan peraturan perundang-undangan yang berlaku; dan/atau
+b.	Gunung meletus, banjir, gempa bumi, kebakaran, dan/atau badai.
+2.	Dalam hal terjadi Keadaan Kahar (Force Majeure) sebagaimana dimaksud pada ayat (1) Pasal ini, maka Pihak yang mengalami Keadaan Kahar (Force Majeure) berkewajiban memberitahukan secara tertulis kepada Pihak lainnya dalam waktu 14 (empat belas) hari kalender sejak saat terjadinya, begitu juga saat berakhirnya Keadaan Kahar (Force Majeure) dengan memuat kronologi Keadaan Kahar (Force Majeure) dan rincian dampaknya terhadap pelaksanaan Perjanjian ini dengan menyertakan dokumen pendukung yang relevan dan sah serta dapat dipertanggungjawabkan secara hukum.
+3.	Kelalaian atau keterlambatan dalam memenuhi kewajiban pemberitahuan dimaksud ayat (2) Pasal ini, mengakibatkan tidak diakuinya peristiwa yang dimaksud ayat (1) Pasal ini sebagai Keadaan Kahar (Force Majeure) dan Pihak tersebut tetap wajib melaksanakan kewajiban-kewajibannya sesuai dengan Perjanjian ini.
+4.	Masing-masing Pihak berhak untuk merundingkan kembali hak dan kewajiban masing-masing Pihak, sebagai dampak dari Keadaan Kahar (Force Majeure).
+
+PASAL 7
+PENYELESAIAN SENGKETA
+1.	Setiap perselisihan yang timbul dalam kaitannya dengan Perjanjian ini (termasuk perselisihan mengenai keberadaan, keberlakuan, atau pengakhiran Perjanjian ini), akan diselesaikan terlebih dahulu melalui musyawarah mufakat dalam jangka waktu 30 (tiga puluh) hari kalender sejak tanggal diterimanya suatu pemberitahuan oleh salah satu Pihak mengenai adanya perselisihan berkaitan dengan Perjanjian ini oleh Pihak lainnya.
+2.	Apabila musyawarah sesuai dengan ayat (1) Pasal ini tidak berhasil menyelesaikan perselisihan PARA PIHAK, maka PARA PIHAK sepakat untuk menyelesaikan perselisihan berdasarkan undang-undang dan hukum yang berlaku di Indonesia dan sepakat untuk memilih domisili hukum yang tetap di Pengadilan Negeri Jakarta Selatan.
+
+PASAL 8
+PENUTUP
+1.	Perjanjian ini dibuat, ditafsirkan, dilaksanakan dan tunduk berdasarkan hukum dan peraturan perundang-undangan yang berlaku di Negara Republik Indonesia.
+2.	Segala hal yang belum cukup diatur dalam Perjanjian ini akan dituangkan oleh PARA PIHAK dalam perjanjian tambahan (addendum) yang ditandatangani oleh PARA PIHAK dan merupakan satu kesatuan yang tak terpisahkan dengan Perjanjian ini.
+3.	Jika satu atau lebih dari ketentuan dalam Perjanjian ini tidak berlaku, bertentangan dengan hukum atau tidak dapat diterapkan dalam hal apapun berdasarkan hukum yang berlaku, validitas, dan legalitas atau keberlakuan dari ketentuan lainnya tidak akan terpengaruh atau dikurangi dengan cara apapun.
+4.	Dengan menandatangani Perjanjian ini, PARA PIHAK dianggap telah membaca, memahami, dan menyetujui seluruh Perjanjian ini tanpa paksaan dari pihak manapun.
+
+
+
+
+
+
+
+
+Perjanjian ini dibuat serta ditandatangani oleh PARA PIHAK, pada tempat dan tanggal tersebut pada awal Perjanjian ini, dibuat rangkap 2 (dua), bermeterai cukup serta memiliki kekuatan hukum yang sama.
+
+PIHAK PERTAMA
+	PIHAK KEDUA
+
+
+
+
+
+Yasinta Yulian Hendrata
+	
+
+
+
+------------------------
+
+]
+`
