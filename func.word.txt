@@ -1,0 +1,527 @@
+package main
+
+import (
+	"bytes"
+	"encoding/base64"
+	"fmt"
+	"image"
+	"image/png"
+	"io"
+	"log"
+	"os"
+	"regexp"
+	"strings"
+	"time"
+
+	"archive/zip"
+
+	"github.com/jung-kurt/gofpdf"
+	"github.com/nguyenthenguyen/docx"
+)
+
+// AgreementData represents the dynamic data from database
+type AgreementData struct {
+	// Company B (PIHAK KEDUA) Information
+	CompanyName        string
+	CompanyType        string
+	CompanyAddress     string
+	RepresentativeName string
+	RepresentativeRole string
+	PharmacyName       string
+	PharmacyLicense    string
+
+	// Agreement Details
+	Duration  int // in years
+	StartDate time.Time
+	EndDate   time.Time
+
+	// Signatures
+	Signature1Path string // Path to signature image for PIHAK PERTAMA
+	Signature2Path string // Path to signature image for PIHAK KEDUA
+}
+
+// DocumentProcessor handles DOCX processing and PDF generation
+type DocumentProcessor struct {
+	templatePath string
+	outputPath   string
+	data         *AgreementData
+}
+
+// NewDocumentProcessor creates a new processor instance
+func NewDocumentProcessor(templatePath, outputPath string, data *AgreementData) *DocumentProcessor {
+	return &DocumentProcessor{
+		templatePath: templatePath,
+		outputPath:   outputPath,
+		data:         data,
+	}
+}
+
+// Process handles the complete document processing pipeline
+func (dp *DocumentProcessor) Process() error {
+	// Step 1: Read and replace placeholders in DOCX
+	modifiedContent, err := dp.replaceDocxContent()
+	if err != nil {
+		return fmt.Errorf("error replacing content: %v", err)
+	}
+
+	// Step 2: Extract text content for PDF creation
+	textContent := dp.extractTextFromDocx(modifiedContent)
+
+	// Step 3: Create PDF with content and signatures
+	if err := dp.createPDF(textContent); err != nil {
+		return fmt.Errorf("error creating PDF: %v", err)
+	}
+
+	return nil
+}
+
+// replaceDocxContent reads DOCX and replaces placeholders
+func (dp *DocumentProcessor) replaceDocxContent() (string, error) {
+	// Open docx file
+	r, err := docx.ReadDocxFile(dp.templatePath)
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+
+	// Get document content
+	doc := r.Editable()
+	content := doc.GetContent()
+
+	// Replace placeholders with actual data
+	replacements := map[string]string{
+		"_________________":                 dp.data.CompanyName,
+		"\\[\\*\\]":                         dp.data.CompanyType,
+		"________________________":          dp.data.CompanyAddress,
+		"_______________":                   dp.data.RepresentativeName,
+		"_____":                             dp.data.RepresentativeRole,
+		"_______":                           dp.data.PharmacyName,
+		"______________":                    dp.data.PharmacyLicense,
+		"\\.\\.\\.\\.\\.\\.\\.\\.\\.\\.\\.": fmt.Sprintf("%d", dp.data.Duration),
+		"\\.\\.\\.\\.\\.\\.\\.":             dp.formatDate(dp.data.StartDate),
+		// "\\.\\.\\.\\.\\.\\.\\.\\.\\.\\.\\.": dp.formatDate(dp.data.EndDate),
+	}
+
+	// Apply replacements
+	for placeholder, value := range replacements {
+		re := regexp.MustCompile(placeholder)
+		content = re.ReplaceAllString(content, value)
+	}
+
+	return content, nil
+}
+
+// extractTextFromDocx extracts plain text from DOCX content
+func (dp *DocumentProcessor) extractTextFromDocx(content string) string {
+	// Remove XML tags and clean up the text
+	re := regexp.MustCompile(`<[^>]*>`)
+	text := re.ReplaceAllString(content, "")
+
+	// Clean up extra spaces and newlines
+	text = strings.ReplaceAll(text, "\r", "")
+	lines := strings.Split(text, "\n")
+	var cleanLines []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			cleanLines = append(cleanLines, line)
+		}
+	}
+
+	return strings.Join(cleanLines, "\n")
+}
+
+// createPDF generates PDF from text content with signatures
+func (dp *DocumentProcessor) createPDF(content string) error {
+	pdf := gofpdf.New("P", "mm", "A4", "")
+
+	// Set document properties
+	pdf.SetTitle("Perjanjian Kerja Sama Apotek Daring", true)
+	pdf.SetAuthor("PT Perintis Pelayanan Paripurna", true)
+	pdf.SetCreator("Document Processor", true)
+
+	// Add page
+	pdf.AddPage()
+
+	// Set font
+	pdf.SetFont("Arial", "", 11)
+
+	// Add header
+	dp.addHeader(pdf)
+
+	// Process content by sections
+	sections := dp.splitIntoSections(content)
+
+	for i, section := range sections {
+		// Check if we need a new page
+		if pdf.GetY() > 250 {
+			pdf.AddPage()
+			dp.addHeader(pdf)
+		}
+
+		// Add section content
+		dp.addSection(pdf, section)
+
+		// Add signatures on the last page
+		if i == len(sections)-1 {
+			dp.addSignatures(pdf)
+		}
+	}
+
+	// Save PDF
+	return pdf.OutputFileAndClose(dp.outputPath)
+}
+
+// addHeader adds document header to PDF
+func (dp *DocumentProcessor) addHeader(pdf *gofpdf.Fpdf) {
+	pdf.SetFont("Arial", "B", 14)
+	pdf.Cell(0, 10, "PERJANJIAN KERJA SAMA APOTEK DARING")
+	pdf.Ln(15)
+	pdf.SetFont("Arial", "", 11)
+}
+
+// splitIntoSections splits content into manageable sections
+func (dp *DocumentProcessor) splitIntoSections(content string) []string {
+	// Split by PASAL (articles)
+	sections := regexp.MustCompile(`PASAL \d+`).Split(content, -1)
+
+	// If no PASAL found, split by paragraphs
+	if len(sections) <= 1 {
+		paragraphs := strings.Split(content, "\n\n")
+		return paragraphs
+	}
+
+	return sections
+}
+
+// addSection adds a section to the PDF
+func (dp *DocumentProcessor) addSection(pdf *gofpdf.Fpdf, section string) {
+	lines := strings.Split(section, "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			pdf.Ln(5)
+			continue
+		}
+
+		// Check for PASAL headers
+		if strings.HasPrefix(line, "PASAL") {
+			pdf.SetFont("Arial", "B", 12)
+			pdf.Cell(0, 8, line)
+			pdf.Ln(10)
+			pdf.SetFont("Arial", "", 11)
+		} else if strings.HasPrefix(line, "**") && strings.HasSuffix(line, "**") {
+			// Bold text
+			line = strings.Trim(line, "**")
+			pdf.SetFont("Arial", "B", 11)
+			pdf.MultiCell(0, 6, line, "", "L", false)
+			pdf.SetFont("Arial", "", 11)
+		} else {
+			// Regular text
+			pdf.MultiCell(0, 6, line, "", "J", false)
+		}
+	}
+}
+
+// addSignatures adds signature images to the PDF
+func (dp *DocumentProcessor) addSignatures(pdf *gofpdf.Fpdf) {
+	// Add some space before signatures
+	pdf.Ln(20)
+
+	// Check if we need a new page for signatures
+	if pdf.GetY() > 200 {
+		pdf.AddPage()
+	}
+
+	// Add signature section title
+	pdf.SetFont("Arial", "B", 11)
+	pdf.Cell(0, 10, "Ditandatangani oleh:")
+	pdf.Ln(15)
+
+	// Get current Y position
+	startY := pdf.GetY()
+
+	// Left signature (PIHAK PERTAMA)
+	pdf.SetX(30)
+	pdf.Cell(60, 8, "PIHAK PERTAMA", "", 0, "C")
+
+	// Right signature (PIHAK KEDUA)
+	pdf.SetX(120)
+	pdf.Cell(60, 8, "PIHAK KEDUA", "", 0, "C")
+	pdf.Ln(10)
+
+	// Add signature images
+	if dp.data.Signature1Path != "" && fileExists(dp.data.Signature1Path) {
+		// Add first signature
+		pdf.Image(dp.data.Signature1Path, 40, pdf.GetY(), 40, 0, false, "", 0, "")
+	}
+
+	if dp.data.Signature2Path != "" && fileExists(dp.data.Signature2Path) {
+		// Add second signature
+		pdf.Image(dp.data.Signature2Path, 130, pdf.GetY(), 40, 0, false, "", 0, "")
+	}
+
+	// Move Y position after signatures
+	pdf.SetY(pdf.GetY() + 25)
+
+	// Add names under signatures
+	pdf.SetFont("Arial", "BU", 11)
+	pdf.SetX(30)
+	pdf.Cell(60, 8, "Yasinta Yulian Hendrata", "", 0, "C")
+
+	pdf.SetX(120)
+	pdf.Cell(60, 8, dp.data.RepresentativeName, "", 0, "C")
+	pdf.Ln(8)
+
+	// Add roles
+	pdf.SetFont("Arial", "", 10)
+	pdf.SetX(30)
+	pdf.Cell(60, 6, "Presiden Direktur", "", 0, "C")
+
+	pdf.SetX(120)
+	pdf.Cell(60, 6, dp.data.RepresentativeRole, "", 0, "C")
+}
+
+// formatDate formats date for display
+func (dp *DocumentProcessor) formatDate(date time.Time) string {
+	months := map[int]string{
+		1: "Januari", 2: "Februari", 3: "Maret", 4: "April",
+		5: "Mei", 6: "Juni", 7: "Juli", 8: "Agustus",
+		9: "September", 10: "Oktober", 11: "November", 12: "Desember",
+	}
+
+	day := date.Day()
+	month := months[int(date.Month())]
+	year := date.Year()
+
+	return fmt.Sprintf("%d %s %d", day, month, year)
+}
+
+// fileExists checks if a file exists
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return !os.IsNotExist(err)
+}
+
+// Alternative method using unioffice (more feature-rich but requires license for commercial use)
+type AdvancedProcessor struct {
+	*DocumentProcessor
+}
+
+// ProcessWithImages handles DOCX with embedded images
+func (ap *AdvancedProcessor) ProcessWithImages() error {
+	// Read DOCX as ZIP
+	reader, err := zip.OpenReader(ap.templatePath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	// Create new ZIP for modified DOCX
+	buf := new(bytes.Buffer)
+	writer := zip.NewWriter(buf)
+
+	for _, file := range reader.File {
+		// Process document.xml
+		if file.Name == "word/document.xml" {
+			if err := ap.processDocumentXML(file, writer); err != nil {
+				return err
+			}
+		} else {
+			// Copy other files as-is
+			if err := ap.copyFile(file, writer); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Add signature images to media folder
+	if err := ap.addSignatureImages(writer); err != nil {
+		return err
+	}
+
+	writer.Close()
+
+	// Save modified DOCX
+	tempDocx := strings.TrimSuffix(ap.outputPath, ".pdf") + "_temp.docx"
+	if err := os.WriteFile(tempDocx, buf.Bytes(), 0644); err != nil {
+		return err
+	}
+
+	// Convert to PDF using the modified DOCX
+	return ap.DocumentProcessor.Process()
+}
+
+func (ap *AdvancedProcessor) processDocumentXML(file *zip.File, writer *zip.Writer) error {
+	reader, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		return err
+	}
+
+	// Replace placeholders
+	contentStr := string(content)
+	contentStr = ap.replacePlaceholders(contentStr)
+
+	// Write modified content
+	w, err := writer.Create(file.Name)
+	if err != nil {
+		return err
+	}
+
+	_, err = w.Write([]byte(contentStr))
+	return err
+}
+
+func (ap *AdvancedProcessor) replacePlaceholders(content string) string {
+	replacements := map[string]string{
+		"_______________": ap.data.CompanyName,
+		"[*]":             ap.data.CompanyType,
+		// Add more replacements as needed
+	}
+
+	for placeholder, value := range replacements {
+		content = strings.ReplaceAll(content, placeholder, value)
+	}
+
+	return content
+}
+
+func (ap *AdvancedProcessor) copyFile(file *zip.File, writer *zip.Writer) error {
+	reader, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	w, err := writer.Create(file.Name)
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(w, reader)
+	return err
+}
+
+func (ap *AdvancedProcessor) addSignatureImages(writer *zip.Writer) error {
+	// This would add signature images to the DOCX structure
+	// Implementation depends on specific requirements
+	return nil
+}
+
+// Example usage with database integration
+func main() {
+	// Example: Get data from database (pseudo-code)
+	data := getDataFromDatabase()
+
+	// Create processor
+	processor := NewDocumentProcessor(
+		"template.docx",
+		"output.pdf",
+		data,
+	)
+
+	// Process document
+	if err := processor.Process(); err != nil {
+		log.Fatal("Error processing document:", err)
+	}
+
+	fmt.Println("PDF created successfully!")
+}
+
+// getDataFromDatabase simulates fetching data from database
+func getDataFromDatabase() *AgreementData {
+	return &AgreementData{
+		CompanyName:        "PT Apotek Sehat Sejahtera",
+		CompanyType:        "Perseroan Terbatas",
+		CompanyAddress:     "Jl. Sudirman No. 123, Jakarta Selatan",
+		RepresentativeName: "John Doe",
+		RepresentativeRole: "Direktur",
+		PharmacyName:       "Apotek Sehat",
+		PharmacyLicense:    "SIA/2025/001",
+		Duration:           2,
+		StartDate:          time.Date(2025, 8, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:            time.Date(2027, 7, 31, 0, 0, 0, 0, time.UTC),
+		Signature1Path:     "signatures/signature1.png",
+		Signature2Path:     "signatures/signature2.png",
+	}
+}
+
+// Database integration example using GORM
+type DatabaseConfig struct {
+	Host     string
+	Port     int
+	User     string
+	Password string
+	DBName   string
+}
+
+// GetAgreementFromDB fetches agreement data from database
+func GetAgreementFromDB(agreementID int) (*AgreementData, error) {
+	// This is a placeholder for actual database query
+	// You would use your preferred database driver here
+
+	// Example with database/sql:
+	/*
+		db, err := sql.Open("mysql", "user:password@/dbname")
+		if err != nil {
+			return nil, err
+		}
+		defer db.Close()
+
+		var data AgreementData
+		query := `
+			SELECT company_name, company_type, company_address,
+			       representative_name, representative_role,
+			       pharmacy_name, pharmacy_license, duration,
+			       start_date, end_date
+			FROM agreements
+			WHERE id = ?
+		`
+
+		err = db.QueryRow(query, agreementID).Scan(
+			&data.CompanyName, &data.CompanyType, &data.CompanyAddress,
+			&data.RepresentativeName, &data.RepresentativeRole,
+			&data.PharmacyName, &data.PharmacyLicense, &data.Duration,
+			&data.StartDate, &data.EndDate,
+		)
+
+		if err != nil {
+			return nil, err
+		}
+
+		return &data, nil
+	*/
+
+	return &AgreementData{}, nil
+}
+
+// CreateSignatureFromBase64 creates signature image from base64 string
+func CreateSignatureFromBase64(base64Str string, outputPath string) error {
+	// Decode base64 string
+	decoded, err := base64.StdEncoding.DecodeString(base64Str)
+	if err != nil {
+		return err
+	}
+
+	// Create image from bytes
+	img, _, err := image.Decode(bytes.NewReader(decoded))
+	if err != nil {
+		return err
+	}
+
+	// Save as PNG
+	file, err := os.Create(outputPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	return png.Encode(file, img)
+}
